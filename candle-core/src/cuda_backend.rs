@@ -223,6 +223,14 @@ impl BackendDevice for CudaDevice {
         })
     }
 
+    fn set_seed(&self, seed: u64) -> Result<()> {
+        // We do not call set_seed but instead create a new curand object. This ensures that the
+        // state will be identical and the same random numbers will be generated.
+        let mut curand = self.curand.lock().unwrap();
+        curand.0 = cudarc::curand::CudaRng::new(seed, self.device.clone()).w()?;
+        Ok(())
+    }
+
     fn location(&self) -> crate::DeviceLocation {
         crate::DeviceLocation::Cuda {
             gpu_id: self.device.ordinal(),
@@ -2163,7 +2171,7 @@ impl BackendStorage for CudaStorage {
                 if src_l.is_contiguous() {
                     dev.dtod_copy(&src, &mut dst).w()?
                 } else {
-                    let func = dev.get_or_load_func("ucopy_64", kernels::UNARY)?;
+                    let func = dev.get_or_load_func("ucopy_f64", kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
                     let params = (el_count, dims.len(), &ds, &src, &mut dst);
                     // SAFETY: ffi.

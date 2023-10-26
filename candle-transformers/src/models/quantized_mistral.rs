@@ -1,5 +1,4 @@
-use crate::models::quantized_t5::Embedding;
-use crate::models::with_tracing::QMatMul;
+use crate::quantized_nn::{linear_no_bias, Embedding, Linear, RmsNorm};
 pub use crate::quantized_var_builder::VarBuilder;
 use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::Activation;
@@ -7,45 +6,7 @@ use std::sync::Arc;
 
 pub use crate::models::mistral::Config;
 
-#[derive(Debug)]
-struct Linear {
-    weight: QMatMul,
-}
-
-impl Module for Linear {
-    fn forward(&self, x: &Tensor) -> candle::Result<Tensor> {
-        x.apply(&self.weight)
-    }
-}
-
-fn linear_no_bias(in_dim: usize, out_dim: usize, vb: VarBuilder) -> Result<Linear> {
-    let weight = QMatMul::new(in_dim, out_dim, vb)?;
-    Ok(Linear { weight })
-}
-
-#[derive(Debug)]
-struct RmsNorm {
-    inner: candle_nn::RmsNorm,
-    span: tracing::Span,
-}
-
-impl RmsNorm {
-    fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
-        let weight = vb.get(size, "weight")?.dequantize(vb.device())?;
-        let inner = candle_nn::RmsNorm::new(weight, eps);
-        Ok(Self { inner, span })
-    }
-}
-
-impl Module for RmsNorm {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
-        self.inner.forward(x)
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct RotaryEmbedding {
     sin: Tensor,
     cos: Tensor,
@@ -96,7 +57,7 @@ impl RotaryEmbedding {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MLP {
     gate_proj: Linear,
@@ -129,7 +90,7 @@ impl Module for MLP {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Attention {
     q_proj: Linear,
     k_proj: Linear,
@@ -239,7 +200,7 @@ impl Attention {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct DecoderLayer {
     self_attn: Attention,
     mlp: MLP,
@@ -282,7 +243,7 @@ impl DecoderLayer {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Model {
     embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,

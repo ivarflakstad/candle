@@ -2,37 +2,12 @@
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py
 
 use crate::models::with_tracing::QMatMul;
+use crate::quantized_nn::Embedding;
 pub use crate::quantized_var_builder::VarBuilder;
 use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::Activation;
 use serde::Deserialize;
 use std::sync::Arc;
-
-#[derive(Debug)]
-pub struct Embedding {
-    inner: candle_nn::Embedding,
-    span: tracing::Span,
-}
-
-impl Embedding {
-    pub fn new(d1: usize, d2: usize, vb: VarBuilder) -> Result<Self> {
-        let embeddings = vb.get((d1, d2), "weight")?.dequantize(vb.device())?;
-        let inner = candle_nn::Embedding::new(embeddings, d2);
-        let span = tracing::span!(tracing::Level::TRACE, "embedding");
-        Ok(Self { inner, span })
-    }
-
-    pub fn embeddings(&self) -> &Tensor {
-        self.inner.embeddings()
-    }
-}
-
-impl Module for Embedding {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
-        self.inner.forward(xs)
-    }
-}
 
 fn default_relative_attention_max_distance() -> usize {
     128
@@ -348,21 +323,21 @@ impl T5Attention {
             .contiguous()?;
         let mut k = k
             .reshape((b_sz, kv_len, self.n_heads, self.d_kv))?
-            .transpose(1, 2)?
-            .contiguous()?;
+            .transpose(1, 2)?;
         let mut v = v
             .reshape((b_sz, kv_len, self.n_heads, self.d_kv))?
-            .transpose(1, 2)?
-            .contiguous()?;
+            .transpose(1, 2)?;
 
-        if self.use_cache {
+        if self.use_cache && key_value_states.is_none() {
             let _enter = self.span_cache.enter();
             if let Some((kv_cache_k, kv_cache_v)) = &self.kv_cache {
-                k = Tensor::cat(&[kv_cache_k, &k], 2)?.contiguous()?;
-                v = Tensor::cat(&[kv_cache_v, &v], 2)?.contiguous()?;
+                k = Tensor::cat(&[kv_cache_k, &k], 2)?;
+                v = Tensor::cat(&[kv_cache_v, &v], 2)?;
             };
             self.kv_cache = Some((k.clone(), v.clone()));
         };
+        let k = k.contiguous()?;
+        let v = v.contiguous()?;
         // TODO: Use flash_attn.
         let scores = {
             let _enter = self.span_mm.enter();
@@ -441,7 +416,7 @@ impl T5Attention {
 
         let attn_weights = {
             let _enter = self.span_sm.enter();
-            candle_nn::ops::softmax(&scores, D::Minus1)?
+            candle_nn::ops::softmax_last_dim(&scores)?
         };
         let attn_output = attn_weights.matmul(&v)?;
         let attn_output = attn_output

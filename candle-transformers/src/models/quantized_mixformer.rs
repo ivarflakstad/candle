@@ -1,4 +1,4 @@
-use crate::models::with_tracing::QMatMul;
+use crate::quantized_nn::{layer_norm, linear, Linear};
 pub use crate::quantized_var_builder::VarBuilder;
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Activation;
@@ -7,14 +7,14 @@ pub use crate::models::mixformer::Config;
 
 const MAX_SEQ_LEN: usize = 4096;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Embedding {
-    wte: super::quantized_t5::Embedding,
+    wte: crate::quantized_nn::Embedding,
 }
 
 impl Embedding {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let wte = super::quantized_t5::Embedding::new(cfg.vocab_size, cfg.n_embd, vb.pp("wte"))?;
+        let wte = crate::quantized_nn::Embedding::new(cfg.vocab_size, cfg.n_embd, vb.pp("wte"))?;
         Ok(Self { wte })
     }
 }
@@ -23,37 +23,6 @@ impl Module for Embedding {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         self.wte.forward(xs)
     }
-}
-
-#[derive(Debug)]
-struct Linear {
-    weight: QMatMul,
-    bias: Option<Tensor>,
-}
-
-impl Module for Linear {
-    fn forward(&self, x: &Tensor) -> candle::Result<Tensor> {
-        let x = x.apply(&self.weight)?;
-        match &self.bias {
-            None => Ok(x),
-            Some(bias) => x.broadcast_add(bias),
-        }
-    }
-}
-
-fn linear(in_dim: usize, out_dim: usize, vb: VarBuilder) -> Result<Linear> {
-    let bias = vb.get(out_dim, "bias")?.dequantize(vb.device())?;
-    let weight = QMatMul::new(in_dim, out_dim, vb)?;
-    Ok(Linear {
-        weight,
-        bias: Some(bias),
-    })
-}
-
-fn layer_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<candle_nn::LayerNorm> {
-    let weight = vb.get(size, "weight")?.dequantize(vb.device())?;
-    let bias = vb.get(size, "bias")?.dequantize(vb.device())?;
-    Ok(candle_nn::LayerNorm::new(weight, bias, eps))
 }
 
 fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
@@ -70,7 +39,7 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
     Ok(m)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct RotaryEmbedding {
     sin: Tensor,
     cos: Tensor,
@@ -136,7 +105,7 @@ impl RotaryEmbedding {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MLP {
     fc1: Linear,
@@ -163,7 +132,7 @@ impl Module for MLP {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct CausalLMHead {
     ln: candle_nn::LayerNorm,
     linear: Linear,
@@ -185,7 +154,7 @@ impl Module for CausalLMHead {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MHA {
     wqkv: Linear,
@@ -256,7 +225,7 @@ impl MHA {
                 f32::NEG_INFINITY,
             )?,
         };
-        let attn_weights = candle_nn::ops::softmax(&attn_weights, D::Minus1)?;
+        let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
 
         // output = torch.einsum('bhts,bshd->bthd', attention_drop, v)
         // attn_weights: b*h,t,s, v: b*h,s,d
@@ -274,7 +243,7 @@ impl MHA {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ParallelBlock {
     ln: candle_nn::LayerNorm,
     mixer: MHA,
@@ -309,7 +278,7 @@ impl ParallelBlock {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MixFormerSequentialForCausalLM {
     embedding: Embedding,
     blocks: Vec<ParallelBlock>,
