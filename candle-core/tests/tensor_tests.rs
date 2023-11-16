@@ -1159,3 +1159,65 @@ fn i64_abs() -> Result<()> {
     assert_eq!(t.to_vec1::<i64>()?, [42, 1337]);
     Ok(())
 }
+
+#[test]
+fn tril_triu_eye() -> Result<()> {
+    let t = Tensor::tril2(4, DType::F32, &Device::Cpu)?;
+    assert_eq!(
+        t.to_vec2::<f32>()?,
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0, 0.0],
+            [1.0, 1.0, 1.0, 0.0],
+            [1.0, 1.0, 1.0, 1.0]
+        ],
+    );
+    let t = Tensor::triu2(4, DType::F32, &Device::Cpu)?;
+    assert_eq!(
+        t.to_vec2::<f32>()?,
+        [
+            [1.0, 1.0, 1.0, 1.0],
+            [0.0, 1.0, 1.0, 1.0],
+            [0.0, 0.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0, 1.0]
+        ]
+    );
+    let t = Tensor::eye(4, DType::F32, &Device::Cpu)?;
+    assert_eq!(
+        t.to_vec2::<f32>()?,
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0]
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn cumsum() -> Result<()> {
+    let t = &[3f32, 1., 4., 1., 5.];
+    let t = Tensor::new(t, &Device::Cpu)?;
+    assert_eq!(t.cumsum(0)?.to_vec1::<f32>()?, [3., 4., 8., 9., 14.]);
+    let t = t.unsqueeze(1)?;
+    assert_eq!(
+        t.cumsum(0)?.to_vec2::<f32>()?,
+        [[3.0], [4.0], [8.0], [9.0], [14.0]]
+    );
+    assert_eq!(
+        t.cumsum(1)?.to_vec2::<f32>()?,
+        [[3.0], [1.0], [4.0], [1.0], [5.0]]
+    );
+    let t = &[[3f32, 1., 4., 1., 5.], [2., 1., 7., 8., 2.]];
+    let t = Tensor::new(t, &Device::Cpu)?;
+    assert_eq!(
+        t.cumsum(1)?.to_vec2::<f32>()?,
+        [[3.0, 4.0, 8.0, 9.0, 14.0], [2.0, 3.0, 10.0, 18.0, 20.0]],
+    );
+    assert_eq!(
+        t.cumsum(0)?.to_vec2::<f32>()?,
+        [[3.0, 1.0, 4.0, 1.0, 5.0], [5.0, 2.0, 11.0, 9.0, 7.0]]
+    );
+    Ok(())
+}
